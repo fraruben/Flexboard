@@ -2,6 +2,7 @@ package dev.jz6.flexboard.extension.settings;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.view.inputmethod.InputMethodManager;
 import android.view.WindowManager;
 import android.view.Window;
@@ -16,7 +17,10 @@ import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -433,7 +437,7 @@ public final class FlexboardSettingsFragment extends CommonPreferenceFragment {
         // Save commits text and icon together; Cancel, Back and outside-tap discard both.
         // An "undo" that works everywhere stays "tap the old icon again".
         GridLayout grid = new GridLayout(ui);
-        grid.setColumnCount(4);
+        grid.setColumnCount(6);
         int cell = dp(ui, 48);
         int spacing = dp(ui, 8);
         final String seed = Hotkeys.currentIconToken(ui, slot);
@@ -459,7 +463,10 @@ public final class FlexboardSettingsFragment extends CommonPreferenceFragment {
         // The framework dialog's custom panel doesn't scroll on its own — on a short window the
         // bottom cells (and the button) would be unreachable without the wrapper.
         ScrollView scroll = new ScrollView(ui);
-        scroll.addView(grid);
+        FrameLayout.LayoutParams gridParams = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER_HORIZONTAL);
+        scroll.addView(grid, gridParams);
         column.addView(scroll, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -491,7 +498,9 @@ public final class FlexboardSettingsFragment extends CommonPreferenceFragment {
                     // The preference is stored either way; only the repaint is lost.
                 }
             })
-            .show();
+            .create();
+        dialog.setOnShowListener(d -> alignDialogButtons(dialog, ui));
+        dialog.show();
         for (int i = 0; i < items.size(); i++) {
             final int index = i;
             items.get(i).setOnClickListener(v -> {
@@ -590,7 +599,7 @@ public final class FlexboardSettingsFragment extends CommonPreferenceFragment {
             content = field;
         }
         field.setHint("Paste a Flexboard export here");
-        new AlertDialog.Builder(ui)
+        AlertDialog dialog = new AlertDialog.Builder(ui)
             .setTitle("Import hotkeys")
             .setView(content)
             .setPositiveButton("Apply", (dlog, which) -> {
@@ -608,7 +617,62 @@ public final class FlexboardSettingsFragment extends CommonPreferenceFragment {
                 }
             })
             .setNegativeButton("Cancel", null)
-            .show();
+            .create();
+        dialog.setOnShowListener(d -> alignDialogButtons(dialog, ui));
+        dialog.show();
+    }
+
+    /**
+     * Symmetrically aligns dialog buttons: disables framework baseline alignment (which drops the
+     * positive button down when styles differ), centers them vertically, hides stray dividers,
+     * and equalizes their widths with a balanced gap.
+     */
+    private static void alignDialogButtons(AlertDialog dialog, Context ui) {
+        if (dialog == null) {
+            return;
+        }
+        try {
+            Button positive = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+            Button negative = dialog.getButton(DialogInterface.BUTTON_NEGATIVE);
+            if (positive == null || negative == null) {
+                return;
+            }
+            ViewParent parent = positive.getParent();
+            if (parent instanceof LinearLayout) {
+                LinearLayout buttonBar = (LinearLayout) parent;
+                buttonBar.setBaselineAligned(false);
+                buttonBar.setGravity(Gravity.CENTER_VERTICAL);
+                for (int i = 0; i < buttonBar.getChildCount(); i++) {
+                    View child = buttonBar.getChildAt(i);
+                    if (child != positive && child != negative) {
+                        child.setVisibility(View.GONE);
+                    }
+                }
+            }
+            ViewGroup.LayoutParams posLp = positive.getLayoutParams();
+            ViewGroup.LayoutParams negLp = negative.getLayoutParams();
+            if (posLp instanceof LinearLayout.LayoutParams && negLp instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams posParams = (LinearLayout.LayoutParams) posLp;
+                LinearLayout.LayoutParams negParams = (LinearLayout.LayoutParams) negLp;
+                posParams.gravity = Gravity.CENTER_VERTICAL;
+                negParams.gravity = Gravity.CENTER_VERTICAL;
+                posParams.weight = 1f;
+                negParams.weight = 1f;
+                posParams.width = 0;
+                negParams.width = 0;
+                int halfGap = dp(ui, 4);
+                negParams.rightMargin = halfGap;
+                posParams.leftMargin = halfGap;
+                posParams.topMargin = 0;
+                posParams.bottomMargin = 0;
+                negParams.topMargin = 0;
+                negParams.bottomMargin = 0;
+                positive.setLayoutParams(posParams);
+                negative.setLayoutParams(negParams);
+            }
+        } catch (Throwable ignored) {
+            // Defensive: if the host's view tree differs, stock button behavior is preserved.
+        }
     }
 
     // -----------------------------------------------------------------------------------------

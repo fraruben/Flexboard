@@ -5,7 +5,7 @@ import android.content.Context;
 /**
  * Compile-time shape only.
  */
-public abstract class ViewGroup extends View {
+public abstract class ViewGroup extends View implements ViewParent {
 
     public ViewGroup(Context context) {
         super(context);
@@ -29,12 +29,29 @@ public abstract class ViewGroup extends View {
 
     public static class LayoutParams {
 
-        /** Value -1 predates the MATCH_PARENT name (added in API 8). */
         public static final int MATCH_PARENT = -1;
         public static final int WRAP_CONTENT = -2;
 
+        public int width;
+        public int height;
+
         public LayoutParams(int width, int height) {
-            // stub
+            this.width = width;
+            this.height = height;
         }
+    }
+
+    public static class MarginLayoutParams extends LayoutParams {
+        public int leftMargin;
+        public int topMargin;
+        public int rightMargin;
+        public int bottomMargin;
+
+        public MarginLayoutParams(int width, int height) {
+            super(width, height);
+        }
+
+        public void setMarginStart(int start) {}
+        public void setMarginEnd(int end) {}
     }
 }

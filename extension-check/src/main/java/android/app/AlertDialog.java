@@ -25,6 +25,10 @@ public class AlertDialog {
         return null;
     }
 
+    public android.widget.Button getButton(int whichButton) {
+        return null;
+    }
+
     public void setOnShowListener(DialogInterface.OnShowListener listener) {
     }
 
