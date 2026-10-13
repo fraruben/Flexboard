@@ -56,6 +56,12 @@ public final class ExtensionTests {
         aDiagonalMoveDoesNotClaimTheGesture();
         aRefusedTakeoverReleasesTheSwipe();
         aConfirmedTakeoverKeepsTheSwipe();
+        hotkeyTextIsStoredEncrypted();
+        legacyPlaintextIsPreserved();
+        tamperedCiphertextFailsClosed();
+        crossSlotTamperingIsRejectedByAAD();
+        importBlobEncryptsStoredText();
+        emptyTextIsNotStoredEncrypted();
 
         System.out.printf("%d checks, %d failed%n", checks, failures);
         if (failures > 0) {
@@ -275,6 +281,72 @@ public final class ExtensionTests {
         equal("the next gesture starts clean", "0", String.valueOf(
             SwipeUp.decide(handler, motion(MotionEvent.ACTION_DOWN, 0, 100))));
         SwipeUp.decide(handler, motion(MotionEvent.ACTION_CANCEL, 0, 100));
+    }
+
+    // ---------------------------------------------------------------- hotkey storage encryption (SEC-01)
+
+    private static void hotkeyTextIsStoredEncrypted() {
+        FakeContext context = fresh();
+        Hotkeys.setText(context, 1, "super-secret-password-123");
+        equal("textOf returns decrypted plaintext", "super-secret-password-123", Hotkeys.textOf(context, 1));
+
+        String raw = (String) context.store().get(Hotkeys.textKey(1));
+        truthy("stored text is non-null", raw != null);
+        truthy("stored text starts with enc:v1: prefix", raw != null && raw.startsWith("enc:v1:"));
+        falsy("stored text does not leak plaintext password", raw != null && raw.contains("super-secret-password-123"));
+        falsy("stored text does not leak substring", raw != null && raw.contains("secret"));
+
+        truthy("vault contains master key", context.store("flexboard_vault").containsKey("hotkeys_master_key"));
+    }
+
+    private static void legacyPlaintextIsPreserved() {
+        FakeContext context = fresh();
+        context.store().put(Hotkeys.textKey(2), "legacy-unencrypted-token");
+        equal("unencrypted legacy string is returned as-is", "legacy-unencrypted-token", Hotkeys.textOf(context, 2));
+    }
+
+    private static void tamperedCiphertextFailsClosed() {
+        FakeContext context = fresh();
+        Hotkeys.setText(context, 3, "confidential-data");
+        String raw = (String) context.store().get(Hotkeys.textKey(3));
+        truthy("original ciphertext is present", raw != null && raw.startsWith("enc:v1:"));
+
+        // Tamper with the ciphertext by corrupting the payload
+        String corrupted = raw.substring(0, raw.length() - 4) + "XXXX";
+        context.store().put(Hotkeys.textKey(3), corrupted);
+
+        equal("tampered ciphertext fails closed to empty string", "", Hotkeys.textOf(context, 3));
+        falsy("tampered slot is not shown in toolbar", Hotkeys.shown(context, 3));
+    }
+
+    private static void crossSlotTamperingIsRejectedByAAD() {
+        FakeContext context = fresh();
+        Hotkeys.setText(context, 1, "slot-1-value");
+        String rawSlot1 = (String) context.store().get(Hotkeys.textKey(1));
+
+        // Attacker attempts to copy ciphertext from slot 1 to slot 2
+        context.store().put(Hotkeys.textKey(2), rawSlot1);
+
+        equal("cross-slot ciphertext swap is rejected by AAD", "", Hotkeys.textOf(context, 2));
+        equal("original slot 1 is still readable", "slot-1-value", Hotkeys.textOf(context, 1));
+    }
+
+    private static void importBlobEncryptsStoredText() {
+        FakeContext context = fresh();
+        String blob = "flexboard-hotkeys v1\n1\timported-secret\tflexboard_icon_alternate_email\n";
+        Hotkeys.importFromText(context, blob);
+
+        equal("imported slot text can be read back", "imported-secret", Hotkeys.textOf(context, 1));
+        String raw = (String) context.store().get(Hotkeys.textKey(1));
+        truthy("imported text is stored encrypted", raw != null && raw.startsWith("enc:v1:"));
+        falsy("imported text does not leak into preference file", raw != null && raw.contains("imported-secret"));
+    }
+
+    private static void emptyTextIsNotStoredEncrypted() {
+        FakeContext context = fresh();
+        Hotkeys.setText(context, 1, "");
+        equal("empty text stored as empty string", "", (String) context.store().get(Hotkeys.textKey(1)));
+        equal("textOf returns empty string", "", Hotkeys.textOf(context, 1));
     }
 
     // ---------------------------------------------------------------- the blob

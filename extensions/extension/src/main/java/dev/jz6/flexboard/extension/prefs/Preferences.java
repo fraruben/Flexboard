@@ -78,6 +78,24 @@ public final class Preferences {
 
     private static volatile SharedPreferences cached;
 
+    private static final String VAULT_PREFS = "flexboard_vault";
+    private static volatile SharedPreferences cachedVault;
+
+    /**
+     * Flexboard's internal vault preference file in device-protected storage, used to store
+     * encryption keys securely away from Gboard's main preference file.
+     */
+    public static SharedPreferences vault(Context context) {
+        SharedPreferences local = cachedVault;
+        if (local != null) {
+            return local;
+        }
+        Context storage = deviceProtected(context);
+        local = storage.getSharedPreferences(VAULT_PREFS, Context.MODE_PRIVATE);
+        cachedVault = local;
+        return local;
+    }
+
     @SuppressLint("NewApi") // Both methods are API 24; Gboard's minSdkVersion is 26.
     private static Context deviceProtected(Context context) {
         Context application = context.getApplicationContext();

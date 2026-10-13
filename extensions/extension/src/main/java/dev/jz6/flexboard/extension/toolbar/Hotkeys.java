@@ -8,6 +8,14 @@ import android.graphics.drawable.Drawable;
 
 import dev.jz6.flexboard.extension.prefs.Preferences;
 
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Base64;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
 /**
  * The hotkeys' store contract, read by the emitted smali on every toolbar build.
  *
@@ -141,9 +149,110 @@ public final class Hotkeys {
         return !textOf(context, slot).trim().isEmpty();
     }
 
+    /** Prefix denoting authenticated AES-GCM encrypted payload. */
+    private static final String ENC_PREFIX = "enc:v1:";
+    private static final String CIPHER_TRANSFORMATION = "AES/GCM/NoPadding";
+    private static final String KEY_ALGORITHM = "AES";
+    private static final int KEY_SIZE_BYTES = 32; // 256-bit AES key
+    private static final int GCM_IV_LENGTH = 12; // 96-bit NIST standard IV
+    private static final int GCM_TAG_LENGTH_BITS = 128; // 128-bit authentication tag
+    private static final String VAULT_KEY_ALIAS = "hotkeys_master_key";
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Object KEY_LOCK = new Object();
+    private static volatile SecretKey cachedKey;
+
+    private static SecretKey getSecretKey(Context context) {
+        SecretKey local = cachedKey;
+        if (local != null) {
+            return local;
+        }
+        synchronized (KEY_LOCK) {
+            local = cachedKey;
+            if (local != null) {
+                return local;
+            }
+            try {
+                SharedPreferences vault = Preferences.vault(context);
+                String stored = vault.getString(VAULT_KEY_ALIAS, null);
+                if (stored != null && !stored.isEmpty()) {
+                    byte[] keyBytes = Base64.getDecoder().decode(stored);
+                    if (keyBytes.length == KEY_SIZE_BYTES) {
+                        local = new SecretKeySpec(keyBytes, KEY_ALGORITHM);
+                        cachedKey = local;
+                        return local;
+                    }
+                }
+                byte[] keyBytes = new byte[KEY_SIZE_BYTES];
+                SECURE_RANDOM.nextBytes(keyBytes);
+                String encoded = Base64.getEncoder().encodeToString(keyBytes);
+                vault.edit().putString(VAULT_KEY_ALIAS, encoded).apply();
+                local = new SecretKeySpec(keyBytes, KEY_ALGORITHM);
+                cachedKey = local;
+                return local;
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+    }
+
+    private static String encrypt(Context context, String keyName, String plaintext) {
+        if (plaintext == null || plaintext.isEmpty()) {
+            return "";
+        }
+        try {
+            SecretKey key = getSecretKey(context);
+            if (key == null) {
+                return plaintext;
+            }
+            byte[] iv = new byte[GCM_IV_LENGTH];
+            SECURE_RANDOM.nextBytes(iv);
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv));
+            cipher.updateAAD(keyName.getBytes(StandardCharsets.UTF_8));
+            byte[] ciphertext = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+            byte[] combined = new byte[GCM_IV_LENGTH + ciphertext.length];
+            System.arraycopy(iv, 0, combined, 0, GCM_IV_LENGTH);
+            System.arraycopy(ciphertext, 0, combined, GCM_IV_LENGTH, ciphertext.length);
+            return ENC_PREFIX + Base64.getEncoder().encodeToString(combined);
+        } catch (Throwable t) {
+            return plaintext;
+        }
+    }
+
+    private static String decrypt(Context context, String keyName, String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        if (!raw.startsWith(ENC_PREFIX)) {
+            // Unencrypted legacy string: return as-is for backward compatibility.
+            return raw;
+        }
+        try {
+            SecretKey key = getSecretKey(context);
+            if (key == null) {
+                return "";
+            }
+            String payload = raw.substring(ENC_PREFIX.length());
+            byte[] combined = Base64.getDecoder().decode(payload);
+            if (combined.length < GCM_IV_LENGTH + 16) {
+                return "";
+            }
+            GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH_BITS, combined, 0, GCM_IV_LENGTH);
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, key, spec);
+            cipher.updateAAD(keyName.getBytes(StandardCharsets.UTF_8));
+            byte[] decrypted = cipher.doFinal(combined, GCM_IV_LENGTH, combined.length - GCM_IV_LENGTH);
+            return new String(decrypted, StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            // Fail closed on corrupted ciphertext, tag mismatch, or swapped slot AAD.
+            return "";
+        }
+    }
+
     /** The text the slot's tap commits. */
     public static String textOf(Context context, int slot) {
-        return Preferences.of(context).getString(textKey(slot), "");
+        String raw = Preferences.of(context).getString(textKey(slot), "");
+        return decrypt(context, textKey(slot), raw);
     }
 
     /**
@@ -273,7 +382,10 @@ public final class Hotkeys {
 
     /** Writes a slot's committed text straight to the store (the composite dialog's half). */
     public static void setText(Context context, int slot, String text) {
-        Preferences.of(context).edit().putString(textKey(slot), text).apply();
+        String stored = (text == null || text.isEmpty())
+                ? ""
+                : encrypt(context, textKey(slot), text);
+        Preferences.of(context).edit().putString(textKey(slot), stored).apply();
     }
 
     /** Writes a slot's icon choice — one of the {@link #choices()} names. */
@@ -472,7 +584,10 @@ public final class Hotkeys {
         SharedPreferences.Editor editor = Preferences.of(context).edit();
         for (int slot = 1; slot <= SLOT_COUNT; slot++) {
             String text = texts[slot];
-            editor.putString(textKey(slot), text != null ? text : "");
+            String stored = (text == null || text.isEmpty())
+                    ? ""
+                    : encrypt(context, textKey(slot), text);
+            editor.putString(textKey(slot), stored);
             if (texts[slot] == null) {
                 // Replace, not merge, for the icon as well as the text. Clearing one and leaving
                 // the other made a slot the blob did not mention come back with the icon override
