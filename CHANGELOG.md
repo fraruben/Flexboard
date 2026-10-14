@@ -1,3 +1,8 @@
+# [2.5.3](https://github.com/fraruben/Flexboard/compare/2.5.2...v2.5.3) (2026-10-14)
+
+* **Gboard:** ugh
+* **Gboard:** triggering github action
+
 # [2.5.0](https://github.com/JZ6/Flexboard/compare/v2.4.2...v2.5.0) (2026-10-09)
 
 * **Gboard:** feat: remove Hidden Features (unconfirmed)
